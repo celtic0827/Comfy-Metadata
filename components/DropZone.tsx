@@ -30,7 +30,10 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesDropped, className })
       file.type.startsWith('image/png') || 
       file.type.startsWith('video/mp4') ||
       file.name.endsWith('.png') || 
-      file.name.endsWith('.mp4')
+      file.name.endsWith('.mp4') ||
+      file.name.endsWith('.zip') ||
+      file.type === 'application/zip' ||
+      file.type === 'application/x-zip-compressed'
     );
     
     if (droppedFiles.length > 0) {
@@ -65,7 +68,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesDropped, className })
         ref={fileInputRef}
         type="file" 
         multiple 
-        accept=".png,.mp4" 
+        accept=".png,.mp4,.zip" 
         className="hidden" 
         onChange={handleFileInput}
       />
@@ -80,10 +83,10 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesDropped, className })
 
         <div>
           <h3 className="text-sm font-medium text-gray-300 group-hover:text-white transition-colors">
-            Drop Files
+            Drop Files or ZIP
           </h3>
           <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-wider font-mono">
-            PNG / MP4
+            PNG / MP4 / ZIP
           </p>
         </div>
       </div>

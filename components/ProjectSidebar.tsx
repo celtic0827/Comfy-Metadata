@@ -10,7 +10,8 @@ import {
   ChevronRight, 
   ChevronDown, 
   Search,
-  Pencil
+  Pencil,
+  Archive
 } from 'lucide-react';
 
 interface ProjectSidebarProps {
@@ -22,6 +23,7 @@ interface ProjectSidebarProps {
   onRenameProject: (id: string, newName: string) => void;
   onToggleProject: (id: string) => void;
   onMoveProject: (projectId: string, newParentId: string | null) => void;
+  onExportProject: (projectId: string) => void;
 }
 
 export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
@@ -32,7 +34,8 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onDeleteProject,
   onRenameProject,
   onToggleProject,
-  onMoveProject
+  onMoveProject,
+  onExportProject
 }) => {
   const [creatingForParentId, setCreatingForParentId] = useState<string | null | undefined>(undefined);
   const [newProjectName, setNewProjectName] = useState('');
@@ -225,37 +228,48 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
           {/* Actions (Hover only) */}
           {!isRenaming && (
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
-                onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setCreatingForParentId(project.id);
-                    setNewProjectName('');
-                    if (!project.isOpen) onToggleProject(project.id);
-                }}
-                className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-white"
-                title="Add Sub-folder"
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setCreatingForParentId(project.id);
+                        setNewProjectName('');
+                        if (!project.isOpen) onToggleProject(project.id);
+                    }}
+                    className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-white"
+                    title="Add Sub-folder"
                 >
-                <Plus size={12} />
+                    <Plus size={12} />
                 </button>
                 <button
-                onClick={(e) => startRenaming(project, e)}
-                className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-blue-400"
-                title="Rename"
+                    onClick={(e) => startRenaming(project, e)}
+                    className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-blue-400"
+                    title="Rename"
                 >
-                <Pencil size={12} />
+                    <Pencil size={12} />
                 </button>
                 <button
-                onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onDeleteProject(project.id);
-                }}
-                className="p-1 rounded hover:bg-red-900/50 hover:text-red-400 text-gray-500"
-                title="Delete Folder"
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onExportProject(project.id);
+                    }}
+                    className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-green-400"
+                    title="Archive to ZIP"
                 >
-                <Trash2 size={12} />
+                    <Archive size={12} />
+                </button>
+                <button
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDeleteProject(project.id);
+                    }}
+                    className="p-1 rounded hover:bg-red-900/50 hover:text-red-400 text-gray-500"
+                    title="Delete Folder"
+                >
+                    <Trash2 size={12} />
                 </button>
             </div>
           )}

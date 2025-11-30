@@ -6,11 +6,12 @@ import { DropZone } from './components/DropZone';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { DetailModal } from './components/DetailModal';
 import { GridItem } from './components/GridItem';
-import { MoveModal } from './components/MoveModal'; // Imported
+import { MoveModal } from './components/MoveModal'; 
 import { ComfyFile, Project } from './types';
 import { parseComfyMetadata } from './utils/comfyParser';
 import * as db from './utils/db';
 import { Trash2, Menu, Upload, ScanLine, Command, Folder, CheckSquare, FolderInput, X, Check } from 'lucide-react';
+import JSZip from 'jszip';
 
 const App: React.FC = () => {
   // --- State ---
@@ -181,7 +182,6 @@ const App: React.FC = () => {
   };
 
   const handleDeleteProject = async (id: string) => {
-    // ... (Existing implementation kept same, omitted for brevity as it's not changing)
     const getDescendantIds = (rootId: string, allProjects: Project[]): string[] => {
         const children = allProjects.filter(p => p.parentId === rootId);
         let ids = children.map(c => c.id);
@@ -229,6 +229,44 @@ const App: React.FC = () => {
     }
   };
 
+  const handleExportProject = async (projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    try {
+        const projectFiles = await db.getFilesByProject(projectId);
+        
+        if (projectFiles.length === 0) {
+            alert("This folder is empty.");
+            return;
+        }
+
+        const zip = new JSZip();
+        
+        // Add files to zip
+        projectFiles.forEach(file => {
+            zip.file(file.fileName, file.blob);
+        });
+
+        // Generate zip
+        const content = await zip.generateAsync({ type: "blob" });
+        
+        // Download logic
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${project.name}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } catch (e) {
+        console.error("Export failed", e);
+        alert("Failed to export project.");
+    }
+  };
+
   // --- File Actions ---
 
   const processFiles = useCallback(async (newFiles: File[]) => {
@@ -238,7 +276,41 @@ const App: React.FC = () => {
     setIsSelectionMode(false);
     setSelectedIds(new Set());
 
-    const tempEntries: ComfyFile[] = newFiles.map(file => ({
+    const filesToProcess: File[] = [];
+
+    // Pre-processing for ZIP files
+    for (const file of newFiles) {
+        if (file.name.endsWith('.zip') || file.type.includes('zip')) {
+            try {
+                const zip = await JSZip.loadAsync(file);
+                const entries = Object.keys(zip.files);
+                
+                for (const filename of entries) {
+                    const entry = zip.files[filename];
+                    if (!entry.dir) {
+                        const lowerName = filename.toLowerCase();
+                        if (lowerName.endsWith('.png') || lowerName.endsWith('.mp4')) {
+                            const blob = await entry.async('blob');
+                            const type = lowerName.endsWith('.mp4') ? 'video/mp4' : 'image/png';
+                            // Clean filename (remove path if present)
+                            const cleanName = filename.split('/').pop() || filename;
+                            const extractedFile = new File([blob], cleanName, { type });
+                            filesToProcess.push(extractedFile);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to unzip file", file.name, e);
+                alert(`Failed to extract ${file.name}`);
+            }
+        } else {
+            filesToProcess.push(file);
+        }
+    }
+    
+    if (filesToProcess.length === 0) return;
+
+    const tempEntries: ComfyFile[] = filesToProcess.map(file => ({
       id: uuidv4(), 
       projectId: activeProjectId,
       fileName: file.name,
@@ -374,7 +446,10 @@ const App: React.FC = () => {
       file.type.startsWith('image/png') || 
       file.type.startsWith('video/mp4') ||
       file.name.endsWith('.png') || 
-      file.name.endsWith('.mp4')
+      file.name.endsWith('.mp4') ||
+      file.name.endsWith('.zip') ||
+      file.type === 'application/zip' ||
+      file.type.includes('zip')
     );
     
     if (droppedFiles.length > 0) {
@@ -436,6 +511,7 @@ const App: React.FC = () => {
                 onRenameProject={handleRenameProject}
                 onToggleProject={handleToggleProject}
                 onMoveProject={handleMoveProject}
+                onExportProject={handleExportProject}
             />
         </div>
      </div>
@@ -591,7 +667,7 @@ const App: React.FC = () => {
                             className="h-64 border-dashed border-gray-800 bg-gray-900/20 hover:bg-gray-900/40"
                         />
                         <p className="text-center text-gray-500 mt-4 text-xs uppercase tracking-wider">
-                            Project is empty. Drop files to start.
+                            Project is empty. Drop files or ZIP to start.
                         </p>
                     </div>
                 )}
