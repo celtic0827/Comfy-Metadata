@@ -44,6 +44,7 @@ export const GridItem: React.FC<GridItemProps> = ({
   };
 
   const handleDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     if (onDelete && confirm('Delete this file?')) {
       onDelete();

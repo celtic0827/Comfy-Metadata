@@ -16,9 +16,6 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   const result = { positive: '', negative: '', all: [] as string[] };
   
   // Normalize nodes into a map for easy ID lookup
-  // API Format: { "id": { ... } }
-  // Workflow Format: { "nodes": [ ... ], "links": [ ... ] }
-  
   let nodesMap: Record<string, any> = {};
   let isApiFormat = false;
 
@@ -28,23 +25,39 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
     data.nodes.forEach((node: any) => {
       nodesMap[node.id] = node;
     });
-    // For workflow format, we need links to trace. 
-    // We'll create a reverse lookup: linkID -> { origin_id, origin_slot, ... }
-    // But simplistic approach: finding text directly in this format is harder without executing.
-    // However, usually PNGs contain the API format in the "prompt" keyword.
   } else if (typeof data === 'object') {
     // API Prompt Format (Execution Graph)
     isApiFormat = true;
     nodesMap = data;
   }
 
+  // Known keys used by various custom nodes for text input
+  const TEXT_INPUT_KEYS = [
+    'text', 'text_g', 'text_l', 'string', 'prompt', 'value', 'input_text', 'string_field', 
+    'text_positive', 'text_negative', 'text_a', 'text_b'
+  ];
+
   // 2. Helper to get input value or trace link
   const resolveInput = (node: any, inputName: string, visited = new Set<string>()): string | null => {
-    if (!node || !node.inputs) return null;
-    if (visited.has(node.id || '')) return null; // Cycle detection
-    // visited.add(node.id || ''); // Add if tracking cycles strictly
+    if (!node) return null;
+    
+    // Inputs can be in 'inputs' (API) or 'widgets_values' (UI)
+    let val = node.inputs ? node.inputs[inputName] : undefined;
+    
+    // If not found in inputs, check widgets_values if available (UI format usually)
+    // widgets_values is an array, tricky to map by name without extra logic, 
+    // but sometimes text is just the first widget.
+    
+    if (val === undefined && !isApiFormat && node.widgets_values) {
+        // Naive check: if inputName implies text, look for strings in widgets
+        if (typeof node.widgets_values === 'object') { // sometimes array, sometimes map depending on version
+             const arr = Array.isArray(node.widgets_values) ? node.widgets_values : Object.values(node.widgets_values);
+             const strVal = arr.find((v: any) => typeof v === 'string' && v.length > 2);
+             if (strVal) return strVal;
+        }
+    }
 
-    const val = node.inputs[inputName];
+    if (visited.has(node.id || '')) return null; // Cycle detection
 
     // Case A: Direct String value
     if (typeof val === 'string') return val;
@@ -55,32 +68,46 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
       const sourceNode = nodesMap[sourceId];
       if (!sourceNode) return null;
 
-      // Recurse based on source node type
       const type = (sourceNode.class_type || '').toLowerCase();
       
-      // Found Text Node
-      if (type.includes('cliptextencode') || type.includes('prompt')) {
-        return sourceNode.inputs.text || sourceNode.inputs.text_g || sourceNode.inputs.text_l;
+      // 2a. Found Text Node (Standard or Custom)
+      if (
+          type.includes('text') || 
+          type.includes('prompt') || 
+          type.includes('string') ||
+          type.includes('styles') // Styles nodes
+      ) {
+        // Try all known text keys
+        for (const key of TEXT_INPUT_KEYS) {
+            if (sourceNode.inputs && sourceNode.inputs[key] && typeof sourceNode.inputs[key] === 'string') {
+                return sourceNode.inputs[key];
+            }
+        }
+        
+        // If no known key matches, grab the first string property in inputs
+        if (sourceNode.inputs) {
+            for (const v of Object.values(sourceNode.inputs)) {
+                if (typeof v === 'string' && v.length > 2) return v as string;
+            }
+        }
       }
       
-      // Found Combiner / Reroute (Pass-through)
-      // e.g. ConditioningCombine, Reroute
-      if (type.includes('reroute') || type.includes('primitive')) {
-        // Reroute usually just passes the first input or "input"
-        // Primitives usually have a value or input
-        // This is heuristic.
-        // Try finding any input that is a link
-        for (const key of Object.keys(sourceNode.inputs)) {
+      // 2b. Pass-through nodes (Reroute, Primitive, Combiners)
+      if (type.includes('reroute') || type.includes('primitive') || type.includes('node') || type.includes('pipe')) {
+        // Try finding any input that is a link and recurse
+        for (const key of Object.keys(sourceNode.inputs || {})) {
            const res = resolveInput(sourceNode, key, new Set([...visited, sourceId]));
            if (res) return res;
         }
       }
       
-      // Found Conditioning Combine (usually combines 2 prompts)
-      if (type.includes('combine')) {
-         // Try to get both and join
-         const p1 = resolveInput(sourceNode, 'conditioning_1', new Set([...visited, sourceId]));
-         const p2 = resolveInput(sourceNode, 'conditioning_2', new Set([...visited, sourceId]));
+      // 2c. Conditioning Combine
+      if (type.includes('combine') || type.includes('average')) {
+         const p1 = resolveInput(sourceNode, 'conditioning_1', new Set([...visited, sourceId])) || 
+                    resolveInput(sourceNode, 'conditioning_to', new Set([...visited, sourceId]));
+         const p2 = resolveInput(sourceNode, 'conditioning_2', new Set([...visited, sourceId])) || 
+                    resolveInput(sourceNode, 'conditioning_from', new Set([...visited, sourceId]));
+         
          if (p1 && p2) return p1 + "\n\n" + p2;
          return p1 || p2;
       }
@@ -90,47 +117,50 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   };
 
   // 3. Find Samplers and Trace
+  // We look for nodes that look like samplers (KSampler, SamplerCustom, etc.)
   if (isApiFormat) {
      const samplers = Object.values(nodesMap).filter((node: any) => {
        const type = (node.class_type || '').toLowerCase();
-       return type.includes('sampler') && !type.includes('save'); // simple heuristic
+       return type.includes('sampler') && !type.includes('save') && !type.includes('image'); 
      });
 
-     // Identify KSampler, KSamplerAdvanced, etc.
      for (const sampler of samplers) {
-        // Try to find positive
         const pos = resolveInput(sampler, 'positive');
         if (pos && !result.positive) result.positive = cleanText(pos);
 
-        // Try to find negative
         const neg = resolveInput(sampler, 'negative');
         if (neg && !result.negative) result.negative = cleanText(neg);
 
-        if (result.positive && result.negative) break; // Found both
+        if (result.positive && result.negative) break; 
      }
   }
 
   // 4. Fallback / Collect All strings (Generic Summary)
-  // This ensures we show something even if the graph traversal failed or format wasn't standard API
+  // This extracts ANY strings found in the graph if we missed the specific positive/negative connections
   Object.values(nodesMap).forEach((node: any) => {
-    const inputs = node.inputs || node.widgets_values; // widgets_values for workflow format
-    if (!inputs) return;
+    // Check inputs
+    const inputs = node.inputs;
+    if (inputs) {
+        Object.values(inputs).forEach((val: any) => {
+            if (typeof val === 'string' && val.length > 3 && !val.includes('.safetensors') && !val.includes('.pt')) {
+                 result.all.push(val);
+            }
+        });
+    }
 
-    const checkAndAdd = (val: any) => {
-      if (typeof val === 'string' && val.length > 5 && !val.includes('.safetensors')) {
-        // Exclude common non-prompt strings if needed
-        result.all.push(val);
-      }
-    };
-
-    if (Array.isArray(inputs)) {
-      inputs.forEach(checkAndAdd);
-    } else if (typeof inputs === 'object') {
-      Object.values(inputs).forEach(checkAndAdd);
+    // Check widgets_values (Important for UI format JSONs)
+    const widgets = node.widgets_values;
+    if (widgets) {
+         if (Array.isArray(widgets)) {
+             widgets.forEach(val => {
+                if (typeof val === 'string' && val.length > 3 && !val.includes('.safetensors')) {
+                    result.all.push(val);
+                }
+             });
+         }
     }
   });
 
-  // Remove duplicates from 'all'
   result.all = [...new Set(result.all)];
 
   return result;
@@ -138,7 +168,7 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
 
 
 export const parseComfyMetadata = async (file: File): Promise<ParsedMetadata> => {
-  if (file.type.startsWith('image/png')) {
+  if (file.type.startsWith('image/png') || file.name.endsWith('.png')) {
     return parsePNG(file);
   } else if (file.type.startsWith('video/mp4') || file.name.endsWith('.mp4')) {
     return parseMP4(file);
@@ -176,10 +206,8 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
       if (nullByteIndex !== -1) {
         const keyword = decoder.decode(chunkData.slice(0, nullByteIndex));
         if (keyword === 'prompt' || keyword === 'workflow') {
-           // Basic naive decode, skipping parsing iTXt headers for simplicity as Comfy is standard
            const textPart = decoder.decode(chunkData.slice(nullByteIndex + 1));
-           // Remove potential iTXt compression flags/headers residue if any
-           const cleanText = textPart.replace(/^[\x00-\x1F]+/, '');
+           const cleanText = textPart.replace(/^[\x00-\x1F]+/, ''); // Clean header garbage
            foundText.push(cleanText);
         }
       }
@@ -187,19 +215,17 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
     offset += 12 + length; 
   }
 
-  // Prefer "prompt" chunk (API format) as it's easier to trace connections
-  // But store "workflow" (UI) if prompt is missing
+  // ComfyUI uses "prompt" for the API execution graph, and "workflow" for the UI graph.
+  // We prefer "prompt" because it has explicit links.
   let rawJson = foundText.find(t => {
       try {
           const j = JSON.parse(t);
-          // API format usually doesn't have "nodes" array at root, it's keyed by ID
-          // But Comfy sometimes puts API format in "prompt" key.
+          // API format usually is a dictionary of nodes key'd by ID
           return !j.nodes && !Array.isArray(j); 
       } catch { return false; }
   });
 
   if (!rawJson) {
-      // Fallback to workflow format if API format not found
       rawJson = foundText.find(t => t.trim().startsWith('{'));
   }
   
@@ -225,7 +251,9 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
 };
 
 const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
-  const CHUNK_SIZE = 100 * 1024; // 100KB
+  // Increased buffer size to 5MB to catch large workflows embedded at the end
+  const CHUNK_SIZE = 5 * 1024 * 1024; 
+  
   const bufferStart = await file.slice(0, Math.min(file.size, CHUNK_SIZE)).arrayBuffer();
   const bufferEnd = await file.slice(Math.max(0, file.size - CHUNK_SIZE), file.size).arrayBuffer();
   
@@ -235,44 +263,60 @@ const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
   
   const fullTextScan = textStart + textEnd;
 
-  // Look for JSON object
-  const match = fullTextScan.match(/\{"nodes":\[.*\]|"extra_data":\{.*\}|\{"\d+":\{"inputs":/);
+  // Search patterns for Comfy Metadata in MP4 (often UserData or UUID box)
+  // 1. Standard API format keys
+  // 2. Workflow UI keys
+  // 3. Wrapper keys like "prompt": ... or "workflow": ...
   
-  if (match) {
-    const startIdx = match.index!;
-    let openBraces = 0;
-    let endIdx = -1;
-    let foundStart = false;
+  // Strategy: Find the start of a likely JSON object containing specific Comfy keywords
+  const candidateStarts = [];
+  const regex = /\{"nodes":|{"extra_data":|{"version":|{"prompt":/g;
+  let match;
+  
+  while ((match = regex.exec(fullTextScan)) !== null) {
+      candidateStarts.push(match.index);
+  }
 
-    const scanArea = fullTextScan.slice(startIdx);
-    for (let i = 0; i < scanArea.length; i++) {
-      if (scanArea[i] === '{') {
-        openBraces++;
-        foundStart = true;
-      } else if (scanArea[i] === '}') {
-        openBraces--;
-      }
-      if (foundStart && openBraces === 0) {
-        endIdx = i;
-        break;
-      }
-    }
+  for (const startIdx of candidateStarts) {
+      let openBraces = 0;
+      let endIdx = -1;
+      let foundStart = false;
+      
+      // limit scan length to avoid freezing on massive strings
+      const scanLimit = Math.min(fullTextScan.length, startIdx + 500000); 
 
-    if (endIdx !== -1) {
-      const jsonStr = scanArea.substring(0, endIdx + 1);
-      try {
-        const parsed = JSON.parse(jsonStr);
-        const { positive, negative, all } = extractPrompts(parsed);
-        return {
-            raw: jsonStr,
-            summary: all,
-            positivePrompt: positive,
-            negativePrompt: negative
-        };
-      } catch (e) {
-        // fail silent
+      for (let i = startIdx; i < scanLimit; i++) {
+          if (fullTextScan[i] === '{') {
+              openBraces++;
+              foundStart = true;
+          } else if (fullTextScan[i] === '}') {
+              openBraces--;
+          }
+
+          if (foundStart && openBraces === 0) {
+              endIdx = i;
+              break;
+          }
       }
-    }
+
+      if (endIdx !== -1) {
+          const jsonStr = fullTextScan.substring(startIdx, endIdx + 1);
+          try {
+              const parsed = JSON.parse(jsonStr);
+              // Basic validation to check if it looks like Comfy data
+              if (parsed.nodes || parsed.extra_data || parsed.prompt || (parsed[0] && parsed[0].inputs)) {
+                 const { positive, negative, all } = extractPrompts(parsed);
+                 return {
+                     raw: jsonStr,
+                     summary: all,
+                     positivePrompt: positive,
+                     negativePrompt: negative
+                 };
+              }
+          } catch (e) {
+              // invalid json, continue searching
+          }
+      }
   }
 
   throw new Error('Could not find recognizable ComfyUI metadata in MP4.');

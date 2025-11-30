@@ -104,10 +104,11 @@ export const deleteFiles = async (ids: string[]): Promise<void> => {
   const db = await initDB();
   const tx = db.transaction('files', 'readwrite');
   
-  // Sequential delete to ensure stability
+  // Execute sequentially to ensure transaction stability
   for (const id of ids) {
     await tx.store.delete(id);
   }
+  
   await tx.done;
 };
 

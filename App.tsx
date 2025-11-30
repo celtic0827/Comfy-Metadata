@@ -400,19 +400,35 @@ const App: React.FC = () => {
 
   const handleDeleteSelected = async () => {
       if (selectedIds.size === 0) return;
-      if (!confirm(`Delete ${selectedIds.size} selected items?`)) return;
+      
+      const count = selectedIds.size;
+      if (!window.confirm(`Are you sure you want to delete ${count} selected items?`)) return;
 
-      const ids = Array.from(selectedIds) as string[];
+      // Capture IDs in a local variable to be safe in closures
+      const idsToDelete = Array.from(selectedIds) as string[];
+
       try {
-          await db.deleteFiles(ids);
+          await db.deleteFiles(idsToDelete);
           
-          // Use the captured 'ids' to filter, ensuring no state closure issues
-          setFiles(prev => prev.filter(f => !ids.includes(f.id)));
+          setFiles(prev => {
+              // Create a set for O(1) lookup during filter
+              const deletedSet = new Set(idsToDelete);
+              
+              // Clean up object URLs
+              prev.forEach(f => {
+                  if (deletedSet.has(f.id) && f.previewUrl) {
+                      URL.revokeObjectURL(f.previewUrl);
+                  }
+              });
+
+              return prev.filter(f => !deletedSet.has(f.id));
+          });
+
           setSelectedIds(new Set());
           setIsSelectionMode(false);
       } catch (e) {
           console.error("Failed to delete selected files", e);
-          alert("Some files could not be deleted.");
+          alert("Some files could not be deleted. Please try again.");
       }
   };
 
