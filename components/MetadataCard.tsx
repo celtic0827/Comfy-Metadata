@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import * as React from 'react';
+import { useState } from 'react';
 import { ComfyFile } from '../types';
 import { Copy, Check, AlertCircle, FileJson, FileText, Image as ImageIcon, Video as VideoIcon, Database, Terminal } from 'lucide-react';
 

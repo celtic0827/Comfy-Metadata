@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import * as React from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { DropZone } from './components/DropZone';
 import { MetadataCard } from './components/MetadataCard';
