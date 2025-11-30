@@ -1,13 +1,38 @@
+
 import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { ComfyFile } from '../types';
-import { X, Copy, Check, FileJson, FileText, Download, Trash2, Calendar } from 'lucide-react';
+import { X, Copy, Check, FileJson, FileText, Download, Trash2, Calendar, ExternalLink } from 'lucide-react';
 
 interface DetailModalProps {
   file: ComfyFile;
   onClose: () => void;
   onDelete: (id: string) => void;
 }
+
+const renderWithLinks = (text: string) => {
+  if (!text) return null;
+  // Split by URL regex
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, i) => {
+    if (part.match(/https?:\/\/[^\s]+/)) {
+      return (
+        <a 
+          key={i} 
+          href={part} 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 hover:underline align-baseline break-all"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink size={11} className="inline shrink-0 opacity-80" />
+          {part}
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+};
 
 export const DetailModal: React.FC<DetailModalProps> = ({ file, onClose, onDelete }) => {
   const [activeTab, setActiveTab] = useState<'prompts' | 'raw'>('prompts');
@@ -143,7 +168,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({ file, onClose, onDelet
                             </div>
                             <div className="bg-[#0f1115] border border-green-900/20 rounded-xl p-4 shadow-inner min-h-[100px]">
                                 {file.positivePrompt ? (
-                                    <p className="font-mono text-[13px] leading-6 text-green-100/80 whitespace-pre-wrap">{file.positivePrompt}</p>
+                                    <p className="font-mono text-[13px] leading-6 text-green-100/80 whitespace-pre-wrap">
+                                        {renderWithLinks(file.positivePrompt)}
+                                    </p>
                                 ) : (
                                     <p className="text-gray-600 text-xs italic">No positive prompt found.</p>
                                 )}
@@ -168,7 +195,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({ file, onClose, onDelet
                             </div>
                             <div className="bg-[#0f1115] border border-red-900/20 rounded-xl p-4 shadow-inner min-h-[80px]">
                                 {file.negativePrompt ? (
-                                    <p className="font-mono text-[13px] leading-6 text-red-100/80 whitespace-pre-wrap">{file.negativePrompt}</p>
+                                    <p className="font-mono text-[13px] leading-6 text-red-100/80 whitespace-pre-wrap">
+                                        {renderWithLinks(file.negativePrompt)}
+                                    </p>
                                 ) : (
                                     <p className="text-gray-600 text-xs italic">No negative prompt found.</p>
                                 )}
@@ -181,7 +210,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ file, onClose, onDelet
                                 <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Extracted Text</div>
                                 {file.summary.map((text, i) => (
                                     <div key={i} className="bg-gray-900 border border-gray-800 p-3 rounded-lg text-xs text-gray-400 font-mono">
-                                        {text}
+                                        {renderWithLinks(text)}
                                     </div>
                                 ))}
                             </div>

@@ -1,12 +1,37 @@
+
 import * as React from 'react';
 import { useState } from 'react';
 import { ComfyFile } from '../types';
-import { Copy, Check, AlertCircle, FileJson, FileText, Image as ImageIcon, Video as VideoIcon, Database, Terminal } from 'lucide-react';
+import { Copy, Check, AlertCircle, FileJson, FileText, Image as ImageIcon, Video as VideoIcon, Database, Terminal, ExternalLink } from 'lucide-react';
 
 interface MetadataCardProps {
   item: ComfyFile;
   onDelete: (id: string) => void;
 }
+
+const renderWithLinks = (text: string) => {
+  if (!text) return null;
+  // Split by URL regex
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, i) => {
+    if (part.match(/https?:\/\/[^\s]+/)) {
+      return (
+        <a 
+          key={i} 
+          href={part} 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 hover:underline align-baseline break-all"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink size={10} className="inline shrink-0 opacity-80" />
+          {part}
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+};
 
 export const MetadataCard: React.FC<MetadataCardProps> = ({ item, onDelete }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'raw'>('summary');
@@ -168,7 +193,9 @@ export const MetadataCard: React.FC<MetadataCardProps> = ({ item, onDelete }) =>
                             </button>
                          </div>
                          <div className="bg-[#0a0d14] border border-green-500/10 rounded-lg p-3 max-h-40 overflow-y-auto custom-scrollbar shadow-inner">
-                            <p className="font-mono text-[13px] leading-6 text-green-100/80 whitespace-pre-wrap">{item.positivePrompt}</p>
+                            <p className="font-mono text-[13px] leading-6 text-green-100/80 whitespace-pre-wrap">
+                              {renderWithLinks(item.positivePrompt)}
+                            </p>
                          </div>
                       </div>
                     )}
@@ -189,7 +216,9 @@ export const MetadataCard: React.FC<MetadataCardProps> = ({ item, onDelete }) =>
                             </button>
                          </div>
                          <div className="bg-[#0a0d14] border border-red-500/10 rounded-lg p-3 max-h-40 overflow-y-auto custom-scrollbar shadow-inner">
-                            <p className="font-mono text-[13px] leading-6 text-red-100/70 whitespace-pre-wrap">{item.negativePrompt}</p>
+                            <p className="font-mono text-[13px] leading-6 text-red-100/70 whitespace-pre-wrap">
+                               {renderWithLinks(item.negativePrompt)}
+                            </p>
                          </div>
                       </div>
                     )}
@@ -203,7 +232,9 @@ export const MetadataCard: React.FC<MetadataCardProps> = ({ item, onDelete }) =>
                            {item.summary.map((text, idx) => (
                               <div key={idx} className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 relative group">
                                 <div className="max-h-32 overflow-y-auto custom-scrollbar">
-                                    <p className="font-mono text-xs text-gray-400 whitespace-pre-wrap pr-6">{text}</p>
+                                    <p className="font-mono text-xs text-gray-400 whitespace-pre-wrap pr-6">
+                                        {renderWithLinks(text)}
+                                    </p>
                                 </div>
                                 <button 
                                   onClick={() => handleCopyText(text, () => {})}
