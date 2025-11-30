@@ -23,6 +23,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesDropped, className })
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
     
     const droppedFiles = Array.from(e.dataTransfer.files).filter((file: File) => 

@@ -84,14 +84,43 @@ export const deleteFile = async (id: string): Promise<void> => {
 
 export const deleteFilesByProject = async (projectId: string): Promise<void> => {
   const db = await initDB();
-  const tx = db.transaction('files', 'readwrite');
-  const index = tx.store.index('by-project');
   
-  // Iterate and delete
-  let cursor = await index.openCursor(projectId);
-  while (cursor) {
-    await cursor.delete();
-    cursor = await cursor.continue();
+  // 1. Get all keys first (more stable than iterating a cursor while deleting)
+  const keys = await db.getAllKeysFromIndex('files', 'by-project', projectId);
+  
+  if (keys.length === 0) return;
+
+  // 2. Perform sequential deletes in a transaction
+  const tx = db.transaction('files', 'readwrite');
+  for (const key of keys) {
+    await tx.store.delete(key);
+  }
+  await tx.done;
+};
+
+// --- Batch Operations ---
+
+export const deleteFiles = async (ids: string[]): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction('files', 'readwrite');
+  
+  // Sequential delete to ensure stability
+  for (const id of ids) {
+    await tx.store.delete(id);
+  }
+  await tx.done;
+};
+
+export const moveFiles = async (ids: string[], targetProjectId: string): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction('files', 'readwrite');
+  
+  for (const id of ids) {
+    const file = await tx.store.get(id);
+    if (file) {
+      file.projectId = targetProjectId;
+      await tx.store.put(file);
+    }
   }
   await tx.done;
 };

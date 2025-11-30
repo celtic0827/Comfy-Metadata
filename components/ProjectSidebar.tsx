@@ -1,3 +1,4 @@
+
 import * as React from 'react';
 import { useState, useRef, useEffect } from 'react';
 import { Project } from '../types';
@@ -140,8 +141,6 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     const handleDragLeave = (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        // Only clear if we are actually leaving the element
-        // Simple heuristic: clear if leaving, parent dragOver handles the rest
         if (dragOverProjectId === project.id) {
            setDragOverProjectId(null);
         }
@@ -196,27 +195,33 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
           </div>
 
           {/* Name or Rename Input */}
-          {isRenaming ? (
-              <form onSubmit={handleRenameSubmit} className="flex-1 min-w-0" onClick={e => e.stopPropagation()}>
-                  <input
-                    ref={editInputRef}
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={handleRenameSubmit}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Escape') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleCancelRename();
-                        }
-                    }}
-                    className="w-full bg-gray-800 text-sm text-white px-1 py-0.5 rounded border border-blue-500 focus:outline-none"
-                  />
-              </form>
-          ) : (
-              <span className="truncate text-sm flex-1 font-medium">{project.name}</span>
-          )}
+          <div className="flex-1 min-w-0 relative h-5 flex items-center">
+            {isRenaming ? (
+                <form 
+                    onSubmit={handleRenameSubmit} 
+                    className="absolute -left-2 -right-2 -top-1.5 h-8 z-50" 
+                    onClick={e => e.stopPropagation()}
+                >
+                    <input
+                        ref={editInputRef}
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onBlur={handleRenameSubmit}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleCancelRename();
+                            }
+                        }}
+                        className="w-full h-full bg-gray-900 text-sm text-white px-2 rounded-md border border-blue-500 focus:outline-none shadow-xl font-medium"
+                    />
+                </form>
+            ) : (
+                <span className="truncate text-sm font-medium leading-5 w-full">{project.name}</span>
+            )}
+          </div>
 
           {/* Actions (Hover only) */}
           {!isRenaming && (
