@@ -1,4 +1,3 @@
-
 import * as React from 'react';
 import { useState } from 'react';
 import { ComfyFile } from '../types';
@@ -46,6 +45,7 @@ export const GridItem: React.FC<GridItemProps> = ({
   const handleDelete = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    console.log("Delete clicked for", file.id);
     if (onDelete && confirm('Delete this file?')) {
       onDelete();
     }
@@ -96,7 +96,7 @@ export const GridItem: React.FC<GridItemProps> = ({
       )}
       
       {/* Top Overlay: Type & Action Buttons */}
-      <div className="absolute top-0 left-0 right-0 p-2 flex justify-between items-start z-20 pointer-events-none">
+      <div className="absolute top-0 left-0 right-0 p-2 flex justify-between items-start z-30 pointer-events-none">
           {/* Left: Type Icon & Status */}
           <div className="flex items-center gap-1.5 p-1.5 bg-black/40 backdrop-blur-md rounded-lg border border-white/5 shadow-sm">
                {file.type === 'video' ? <VideoIcon size={12} className="text-purple-400" /> : <ImageIcon size={12} className="text-blue-400" />}
