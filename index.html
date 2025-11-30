@@ -57,11 +57,25 @@
       .custom-scrollbar::-webkit-scrollbar-track {
         background: transparent;
       }
+
+      #error-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: #000;
+        color: #ff5555;
+        padding: 20px;
+        z-index: 9999;
+        font-family: monospace;
+        white-space: pre-wrap;
+        overflow: auto;
+      }
     </style>
   <script type="importmap">
 {
   "imports": {
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client.js",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "react": "https://aistudiocdn.com/react@^19.2.0",
@@ -70,8 +84,18 @@
   }
 }
 </script>
+<script>
+  window.onerror = function(message, source, lineno, colno, error) {
+    const overlay = document.getElementById('error-overlay');
+    if (overlay) {
+      overlay.style.display = 'block';
+      overlay.textContent = `Error: ${message}\nSource: ${source}:${lineno}:${colno}\n\nStack:\n${error?.stack || 'No stack trace'}`;
+    }
+  };
+</script>
 </head>
   <body class="bg-gray-950 text-gray-200 antialiased min-h-screen selection:bg-blue-500/30 selection:text-blue-200">
     <div id="root"></div>
+    <div id="error-overlay"></div>
   </body>
 </html>
