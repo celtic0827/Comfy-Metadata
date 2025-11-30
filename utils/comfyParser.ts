@@ -15,6 +15,23 @@ const cleanText = (text: string): string => {
 const extractPrompts = (data: any): { positive: string, negative: string, all: string[] } => {
   const result = { positive: '', negative: '', all: [] as string[] };
   
+  // 0. Unwrap Wrapper if necessary
+  // Sometimes data is { "prompt": { ...nodes... }, "workflow": { ... } } which confuses the parser
+  if (!data.nodes && !Array.isArray(data)) {
+      if (data.prompt && typeof data.prompt === 'object' && !Array.isArray(data.prompt)) {
+          // It's likely an API format wrapper
+          data = data.prompt;
+      } else if (data.workflow && typeof data.workflow === 'object') {
+           // It's likely a UI format wrapper
+           if (data.workflow.nodes) {
+               data = data.workflow;
+           } else {
+               // rarely workflow itself is the nodes object in API format? Unlikely but check
+               data = data.workflow;
+           }
+      }
+  }
+
   // Normalize nodes into a map for easy ID lookup
   let nodesMap: Record<string, any> = {};
   let isApiFormat = false;
@@ -34,7 +51,7 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   // Known keys used by various custom nodes for text input
   const TEXT_INPUT_KEYS = [
     'text', 'text_g', 'text_l', 'string', 'prompt', 'value', 'input_text', 'string_field', 
-    'text_positive', 'text_negative', 'text_a', 'text_b'
+    'text_positive', 'text_negative', 'text_a', 'text_b', 'positive', 'negative'
   ];
 
   // 2. Helper to get input value or trace link
@@ -251,26 +268,29 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
 };
 
 const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
-  // Increased buffer size to 5MB to catch large workflows embedded at the end
-  const CHUNK_SIZE = 5 * 1024 * 1024; 
+  // Strategy: Read larger chunks for video files.
+  // If the file is smaller than 50MB, read the whole thing to be safe.
+  // If larger, read the first 15MB and last 15MB.
   
-  const bufferStart = await file.slice(0, Math.min(file.size, CHUNK_SIZE)).arrayBuffer();
-  const bufferEnd = await file.slice(Math.max(0, file.size - CHUNK_SIZE), file.size).arrayBuffer();
+  const FILE_LIMIT_FOR_FULL_SCAN = 50 * 1024 * 1024; // 50MB
+  const SCAN_CHUNK_SIZE = 15 * 1024 * 1024; // 15MB
   
+  let fullTextScan = '';
   const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
-  const textStart = decoder.decode(bufferStart);
-  const textEnd = decoder.decode(bufferEnd);
-  
-  const fullTextScan = textStart + textEnd;
 
-  // Search patterns for Comfy Metadata in MP4 (often UserData or UUID box)
-  // 1. Standard API format keys
-  // 2. Workflow UI keys
-  // 3. Wrapper keys like "prompt": ... or "workflow": ...
+  if (file.size < FILE_LIMIT_FOR_FULL_SCAN) {
+      const buffer = await file.arrayBuffer();
+      fullTextScan = decoder.decode(buffer);
+  } else {
+      const bufferStart = await file.slice(0, SCAN_CHUNK_SIZE).arrayBuffer();
+      const bufferEnd = await file.slice(Math.max(0, file.size - SCAN_CHUNK_SIZE), file.size).arrayBuffer();
+      fullTextScan = decoder.decode(bufferStart) + decoder.decode(bufferEnd);
+  }
   
-  // Strategy: Find the start of a likely JSON object containing specific Comfy keywords
+  // Search patterns for Comfy Metadata in MP4
+  // Added "workflow", "client_id", "extra_pnginfo" to capture more variations
   const candidateStarts = [];
-  const regex = /\{"nodes":|{"extra_data":|{"version":|{"prompt":/g;
+  const regex = /\{"nodes":|{"extra_data":|{"version":|{"prompt":|{"workflow":|{"client_id":|{"extra_pnginfo":/g;
   let match;
   
   while ((match = regex.exec(fullTextScan)) !== null) {
@@ -282,8 +302,9 @@ const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
       let endIdx = -1;
       let foundStart = false;
       
-      // limit scan length to avoid freezing on massive strings
-      const scanLimit = Math.min(fullTextScan.length, startIdx + 500000); 
+      // Limit scan length to avoid freezing on massive strings
+      // We assume valid metadata won't be larger than 5MB
+      const scanLimit = Math.min(fullTextScan.length, startIdx + 5 * 1024 * 1024); 
 
       for (let i = startIdx; i < scanLimit; i++) {
           if (fullTextScan[i] === '{') {
@@ -304,7 +325,14 @@ const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
           try {
               const parsed = JSON.parse(jsonStr);
               // Basic validation to check if it looks like Comfy data
-              if (parsed.nodes || parsed.extra_data || parsed.prompt || (parsed[0] && parsed[0].inputs)) {
+              if (
+                  parsed.nodes || 
+                  parsed.extra_data || 
+                  parsed.prompt || 
+                  parsed.workflow ||
+                  parsed.extra_pnginfo ||
+                  (parsed[0] && parsed[0].inputs)
+              ) {
                  const { positive, negative, all } = extractPrompts(parsed);
                  return {
                      raw: jsonStr,
