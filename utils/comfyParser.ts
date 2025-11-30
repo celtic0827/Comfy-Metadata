@@ -16,17 +16,14 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   const result = { positive: '', negative: '', all: [] as string[] };
   
   // 0. Unwrap Wrapper if necessary
-  // Sometimes data is { "prompt": { ...nodes... }, "workflow": { ... } } which confuses the parser
+  // sometimes data is { "prompt": { ... }, "workflow": { ... } }
   if (!data.nodes && !Array.isArray(data)) {
       if (data.prompt && typeof data.prompt === 'object' && !Array.isArray(data.prompt)) {
-          // It's likely an API format wrapper
           data = data.prompt;
       } else if (data.workflow && typeof data.workflow === 'object') {
-           // It's likely a UI format wrapper
            if (data.workflow.nodes) {
                data = data.workflow;
            } else {
-               // rarely workflow itself is the nodes object in API format? Unlikely but check
                data = data.workflow;
            }
       }
@@ -51,30 +48,27 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   // Known keys used by various custom nodes for text input
   const TEXT_INPUT_KEYS = [
     'text', 'text_g', 'text_l', 'string', 'prompt', 'value', 'input_text', 'string_field', 
-    'text_positive', 'text_negative', 'text_a', 'text_b', 'positive', 'negative'
+    'text_positive', 'text_negative', 'text_a', 'text_b', 'positive', 'negative',
+    'caption', 'tag', 'tags', 'description', 'message', 't5xxl', 'clip_l'
   ];
 
   // 2. Helper to get input value or trace link
   const resolveInput = (node: any, inputName: string, visited = new Set<string>()): string | null => {
     if (!node) return null;
-    
+    if (visited.has(node.id || '')) return null; // Cycle detection
+
     // Inputs can be in 'inputs' (API) or 'widgets_values' (UI)
     let val = node.inputs ? node.inputs[inputName] : undefined;
     
-    // If not found in inputs, check widgets_values if available (UI format usually)
-    // widgets_values is an array, tricky to map by name without extra logic, 
-    // but sometimes text is just the first widget.
-    
+    // UI Format Fallback: Check widgets_values
     if (val === undefined && !isApiFormat && node.widgets_values) {
-        // Naive check: if inputName implies text, look for strings in widgets
-        if (typeof node.widgets_values === 'object') { // sometimes array, sometimes map depending on version
-             const arr = Array.isArray(node.widgets_values) ? node.widgets_values : Object.values(node.widgets_values);
-             const strVal = arr.find((v: any) => typeof v === 'string' && v.length > 2);
+        // In UI format, widgets are arrays. Identifying "the text widget" is tricky.
+        // Heuristic: Find the first long string.
+        if (Array.isArray(node.widgets_values)) {
+             const strVal = node.widgets_values.find((v: any) => typeof v === 'string' && v.length > 5);
              if (strVal) return strVal;
         }
     }
-
-    if (visited.has(node.id || '')) return null; // Cycle detection
 
     // Case A: Direct String value
     if (typeof val === 'string') return val;
@@ -85,45 +79,33 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
       const sourceNode = nodesMap[sourceId];
       if (!sourceNode) return null;
 
-      const type = (sourceNode.class_type || '').toLowerCase();
-      
-      // 2a. Found Text Node (Standard or Custom)
-      if (
-          type.includes('text') || 
-          type.includes('prompt') || 
-          type.includes('string') ||
-          type.includes('styles') // Styles nodes
-      ) {
-        // Try all known text keys
-        for (const key of TEXT_INPUT_KEYS) {
-            if (sourceNode.inputs && sourceNode.inputs[key] && typeof sourceNode.inputs[key] === 'string') {
-                return sourceNode.inputs[key];
-            }
-        }
-        
-        // If no known key matches, grab the first string property in inputs
-        if (sourceNode.inputs) {
-            for (const v of Object.values(sourceNode.inputs)) {
-                if (typeof v === 'string' && v.length > 2) return v as string;
-            }
+      // Aggressively check for text inputs in the source node FIRST
+      for (const key of TEXT_INPUT_KEYS) {
+        const inputVal = sourceNode.inputs ? sourceNode.inputs[key] : undefined;
+        if (typeof inputVal === 'string' && inputVal.length > 1) {
+             return inputVal;
         }
       }
+
+      const type = (sourceNode.class_type || '').toLowerCase();
       
-      // 2b. Pass-through nodes (Reroute, Primitive, Combiners)
-      if (type.includes('reroute') || type.includes('primitive') || type.includes('node') || type.includes('pipe')) {
-        // Try finding any input that is a link and recurse
+      // Pass-through nodes
+      if (type.includes('reroute') || type.includes('primitive') || type.includes('node') || type.includes('pipe') || type.includes('bus')) {
         for (const key of Object.keys(sourceNode.inputs || {})) {
            const res = resolveInput(sourceNode, key, new Set([...visited, sourceId]));
            if (res) return res;
         }
       }
       
-      // 2c. Conditioning Combine
-      if (type.includes('combine') || type.includes('average')) {
+      // Combiners
+      if (type.includes('combine') || type.includes('concat') || type.includes('average')) {
          const p1 = resolveInput(sourceNode, 'conditioning_1', new Set([...visited, sourceId])) || 
-                    resolveInput(sourceNode, 'conditioning_to', new Set([...visited, sourceId]));
+                    resolveInput(sourceNode, 'text_a', new Set([...visited, sourceId])) ||
+                    resolveInput(sourceNode, 'string_a', new Set([...visited, sourceId]));
+
          const p2 = resolveInput(sourceNode, 'conditioning_2', new Set([...visited, sourceId])) || 
-                    resolveInput(sourceNode, 'conditioning_from', new Set([...visited, sourceId]));
+                    resolveInput(sourceNode, 'text_b', new Set([...visited, sourceId])) ||
+                    resolveInput(sourceNode, 'string_b', new Set([...visited, sourceId]));
          
          if (p1 && p2) return p1 + "\n\n" + p2;
          return p1 || p2;
@@ -134,15 +116,17 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   };
 
   // 3. Find Samplers and Trace
-  // We look for nodes that look like samplers (KSampler, SamplerCustom, etc.)
   if (isApiFormat) {
+     // Look for KSampler, SamplerCustom, etc.
      const samplers = Object.values(nodesMap).filter((node: any) => {
        const type = (node.class_type || '').toLowerCase();
-       return type.includes('sampler') && !type.includes('save') && !type.includes('image'); 
+       // Exclude Save/Load nodes, only want processing nodes
+       return (type.includes('sampler') || type.includes('generate')) && !type.includes('save') && !type.includes('load'); 
      });
 
      for (const sampler of samplers) {
-        const pos = resolveInput(sampler, 'positive');
+        // Try common input names for positive/negative conditioning
+        const pos = resolveInput(sampler, 'positive') || resolveInput(sampler, 'conditioning');
         if (pos && !result.positive) result.positive = cleanText(pos);
 
         const neg = resolveInput(sampler, 'negative');
@@ -153,28 +137,24 @@ const extractPrompts = (data: any): { positive: string, negative: string, all: s
   }
 
   // 4. Fallback / Collect All strings (Generic Summary)
-  // This extracts ANY strings found in the graph if we missed the specific positive/negative connections
   Object.values(nodesMap).forEach((node: any) => {
-    // Check inputs
+    // Inputs
     const inputs = node.inputs;
     if (inputs) {
         Object.values(inputs).forEach((val: any) => {
-            if (typeof val === 'string' && val.length > 3 && !val.includes('.safetensors') && !val.includes('.pt')) {
+            if (typeof val === 'string' && val.length > 3 && !val.includes('.safetensors') && !val.includes('.pt') && !val.includes('.ckpt')) {
                  result.all.push(val);
             }
         });
     }
-
-    // Check widgets_values (Important for UI format JSONs)
+    // Widgets (UI Format)
     const widgets = node.widgets_values;
-    if (widgets) {
-         if (Array.isArray(widgets)) {
-             widgets.forEach(val => {
-                if (typeof val === 'string' && val.length > 3 && !val.includes('.safetensors')) {
-                    result.all.push(val);
-                }
-             });
-         }
+    if (widgets && Array.isArray(widgets)) {
+         widgets.forEach(val => {
+            if (typeof val === 'string' && val.length > 3 && !val.includes('.safetensors')) {
+                result.all.push(val);
+            }
+         });
     }
   });
 
@@ -224,7 +204,7 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
         const keyword = decoder.decode(chunkData.slice(0, nullByteIndex));
         if (keyword === 'prompt' || keyword === 'workflow') {
            const textPart = decoder.decode(chunkData.slice(nullByteIndex + 1));
-           const cleanText = textPart.replace(/^[\x00-\x1F]+/, ''); // Clean header garbage
+           const cleanText = textPart.replace(/^[\x00-\x1F]+/, ''); 
            foundText.push(cleanText);
         }
       }
@@ -232,13 +212,11 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
     offset += 12 + length; 
   }
 
-  // ComfyUI uses "prompt" for the API execution graph, and "workflow" for the UI graph.
-  // We prefer "prompt" because it has explicit links.
+  // Prefer "prompt" (API format) over "workflow" (UI format)
   let rawJson = foundText.find(t => {
       try {
           const j = JSON.parse(t);
-          // API format usually is a dictionary of nodes key'd by ID
-          return !j.nodes && !Array.isArray(j); 
+          return !j.nodes && !Array.isArray(j); // heuristic for API format
       } catch { return false; }
   });
 
@@ -269,11 +247,8 @@ const parsePNG = async (file: File): Promise<ParsedMetadata> => {
 
 const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
   // Strategy: Read larger chunks for video files.
-  // If the file is smaller than 50MB, read the whole thing to be safe.
-  // If larger, read the first 15MB and last 15MB.
-  
-  const FILE_LIMIT_FOR_FULL_SCAN = 50 * 1024 * 1024; // 50MB
-  const SCAN_CHUNK_SIZE = 15 * 1024 * 1024; // 15MB
+  const FILE_LIMIT_FOR_FULL_SCAN = 100 * 1024 * 1024; // 100MB
+  const SCAN_CHUNK_SIZE = 20 * 1024 * 1024; // 20MB scan at start/end if too big
   
   let fullTextScan = '';
   const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
@@ -287,12 +262,15 @@ const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
       fullTextScan = decoder.decode(bufferStart) + decoder.decode(bufferEnd);
   }
   
-  // Search patterns for Comfy Metadata in MP4
-  // Added "workflow", "client_id", "extra_pnginfo" to capture more variations
-  const candidateStarts = [];
-  const regex = /\{"nodes":|{"extra_data":|{"version":|{"prompt":|{"workflow":|{"client_id":|{"extra_pnginfo":/g;
+  // Search patterns
+  const regex = /\{"nodes":|{"extra_data":|{"version":|{"prompt":|{"workflow":|{"client_id":|{"extra_pnginfo":|{"id":|{"last_node_id":|{"groups":|{"config":|\{"\d+":/g;
   let match;
   
+  let bestResult: ParsedMetadata | null = null;
+  let fallbackResult: ParsedMetadata | null = null;
+
+  // Collect all potential JSON starts
+  const candidateStarts = [];
   while ((match = regex.exec(fullTextScan)) !== null) {
       candidateStarts.push(match.index);
   }
@@ -302,9 +280,7 @@ const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
       let endIdx = -1;
       let foundStart = false;
       
-      // Limit scan length to avoid freezing on massive strings
-      // We assume valid metadata won't be larger than 5MB
-      const scanLimit = Math.min(fullTextScan.length, startIdx + 5 * 1024 * 1024); 
+      const scanLimit = Math.min(fullTextScan.length, startIdx + 10 * 1024 * 1024); 
 
       for (let i = startIdx; i < scanLimit; i++) {
           if (fullTextScan[i] === '{') {
@@ -324,28 +300,47 @@ const parseMP4 = async (file: File): Promise<ParsedMetadata> => {
           const jsonStr = fullTextScan.substring(startIdx, endIdx + 1);
           try {
               const parsed = JSON.parse(jsonStr);
-              // Basic validation to check if it looks like Comfy data
-              if (
-                  parsed.nodes || 
-                  parsed.extra_data || 
-                  parsed.prompt || 
-                  parsed.workflow ||
-                  parsed.extra_pnginfo ||
-                  (parsed[0] && parsed[0].inputs)
-              ) {
-                 const { positive, negative, all } = extractPrompts(parsed);
-                 return {
+              
+              const isUI = !!parsed.nodes && Array.isArray(parsed.nodes);
+              const isAPI = !isUI && typeof parsed === 'object' && Object.keys(parsed).some(k => !isNaN(Number(k)) && (parsed[k].inputs || parsed[k].class_type));
+              const isWrapper = !!parsed.prompt || !!parsed.workflow || !!parsed.extra_pnginfo;
+
+              if (isAPI || isUI || isWrapper) {
+                 const extracted = extractPrompts(parsed);
+                 
+                 const result = {
                      raw: jsonStr,
-                     summary: all,
-                     positivePrompt: positive,
-                     negativePrompt: negative
+                     summary: extracted.all,
+                     positivePrompt: extracted.positive,
+                     negativePrompt: extracted.negative
                  };
+
+                 // Priority Logic:
+                 // 1. API Format (has specific positive/negative structure extracted)
+                 // 2. UI Format (usually has empty positive/negative but good for fallback)
+                 
+                 if (isAPI && (extracted.positive || extracted.negative)) {
+                     // Gold standard found, return immediately
+                     return result;
+                 }
+                 
+                 if (isAPI && !bestResult) {
+                     bestResult = result;
+                 } else if (isUI && !fallbackResult) {
+                     fallbackResult = result;
+                 } else if (isWrapper && !fallbackResult) {
+                     fallbackResult = result;
+                 }
               }
           } catch (e) {
-              // invalid json, continue searching
+              // invalid json, continue
           }
       }
   }
+
+  // Return best found
+  if (bestResult) return bestResult;
+  if (fallbackResult) return fallbackResult;
 
   throw new Error('Could not find recognizable ComfyUI metadata in MP4.');
 };
