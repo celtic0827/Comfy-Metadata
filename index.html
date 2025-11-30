@@ -9,29 +9,12 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script>
-      // 1. Global Error Handler: Prints startup errors to the screen
+      // 1. Global Error Handler
       window.onerror = function(message, source, lineno, colno, error) {
-        const root = document.getElementById('root');
-        if (root) {
-          root.innerHTML = `
-            <div style="padding: 20px; color: #ef4444; background: #1a1a1a; font-family: monospace; height: 100vh;">
-              <h2 style="font-size: 1.5rem; margin-bottom: 1rem;">Startup Error</h2>
-              <p style="margin-bottom: 0.5rem;"><strong>Message:</strong> ${message}</p>
-              <p style="margin-bottom: 0.5rem;"><strong>Source:</strong> ${source}:${lineno}:${colno}</p>
-              <pre style="background: #000; padding: 10px; border-radius: 4px; overflow: auto; margin-top: 10px;">${error ? error.stack : 'No stack trace'}</pre>
-            </div>
-          `;
-        }
         console.error("Global Error Caught:", error);
       };
 
-      // 2. Polyfill for process.env.NODE_ENV
-      window.process = {
-        env: {
-          NODE_ENV: 'production'
-        }
-      };
-      
+      // 2. Tailwind Config
       tailwind.config = {
         theme: {
           extend: {
@@ -82,20 +65,20 @@
   <script type="importmap">
 {
   "imports": {
-    "lucide-react": "https://aistudiocdn.com/lucide-react@0.344.0",
-    "react-dom/client": "https://aistudiocdn.com/react-dom@18.3.1/client",
-    "react-dom": "https://aistudiocdn.com/react-dom@18.3.1",
-    "react/jsx-runtime": "https://aistudiocdn.com/react@18.3.1/jsx-runtime",
-    "react": "https://aistudiocdn.com/react@18.3.1",
-    "uuid": "https://aistudiocdn.com/uuid@9.0.1",
-    "idb": "https://aistudiocdn.com/idb@8.0.0",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/"
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "vite": "https://aistudiocdn.com/vite@^7.2.4",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1",
+    "idb": "https://aistudiocdn.com/idb@^8.0.3",
+    "uuid": "https://aistudiocdn.com/uuid@^13.0.0"
   }
 }
 </script>
 </head>
   <body class="bg-gray-950 text-gray-200 antialiased min-h-screen selection:bg-blue-500/30 selection:text-blue-200">
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
