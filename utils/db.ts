@@ -1,5 +1,6 @@
 
-import { openDB, DBSchema, IDBPDatabase } from 'idb';
+import { openDB } from 'idb';
+import type { DBSchema, IDBPDatabase } from 'idb';
 import { Project, ComfyFile } from '../types';
 
 interface ComfyDB extends DBSchema {
