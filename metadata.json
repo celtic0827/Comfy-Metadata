@@ -1,0 +1,5 @@
+{
+  "name": "Comfy Metadata",
+  "description": "A tool to extract and view generation prompts/workflows from ComfyUI images (PNG) and videos (MP4).",
+  "requestFramePermissions": []
+}
