@@ -65,6 +65,12 @@ export const getFilesByProject = async (projectId: string): Promise<ComfyFile[]>
   return files as ComfyFile[];
 };
 
+export const getAllFiles = async (): Promise<ComfyFile[]> => {
+  const db = await initDB();
+  const files = await db.getAll('files');
+  return files as ComfyFile[];
+};
+
 export const countFilesByProject = async (projectId: string): Promise<number> => {
   const db = await initDB();
   return db.countFromIndex('files', 'by-project', projectId);
@@ -123,5 +129,27 @@ export const moveFiles = async (ids: string[], targetProjectId: string): Promise
       await tx.store.put(file);
     }
   }
+  await tx.done;
+};
+
+// --- Backup / Restore Helpers ---
+
+export const importDatabase = async (projects: Project[], files: ComfyFile[]) => {
+  const db = await initDB();
+  const tx = db.transaction(['projects', 'files'], 'readwrite');
+  
+  const projectStore = tx.objectStore('projects');
+  const fileStore = tx.objectStore('files');
+
+  for (const p of projects) {
+    await projectStore.put(p);
+  }
+
+  for (const f of files) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { previewUrl, ...fileToSave } = f;
+    await fileStore.put(fileToSave);
+  }
+
   await tx.done;
 };

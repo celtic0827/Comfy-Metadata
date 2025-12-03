@@ -11,7 +11,10 @@ import {
   ChevronDown, 
   Search,
   Pencil,
-  Archive
+  Archive,
+  DownloadCloud,
+  UploadCloud,
+  Database
 } from 'lucide-react';
 
 interface ProjectSidebarProps {
@@ -24,6 +27,8 @@ interface ProjectSidebarProps {
   onToggleProject: (id: string) => void;
   onMoveProject: (projectId: string, newParentId: string | null) => void;
   onExportProject: (projectId: string) => void;
+  onBackupSystem: () => void;
+  onRestoreSystem: (file: File) => void;
 }
 
 export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
@@ -35,7 +40,9 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onRenameProject,
   onToggleProject,
   onMoveProject,
-  onExportProject
+  onExportProject,
+  onBackupSystem,
+  onRestoreSystem
 }) => {
   const [creatingForParentId, setCreatingForParentId] = useState<string | null | undefined>(undefined);
   const [newProjectName, setNewProjectName] = useState('');
@@ -44,6 +51,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
 
   // Drag and Drop State
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
@@ -92,6 +100,18 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const handleCancelRename = () => {
       setEditingProjectId(null);
       setEditName('');
+  };
+
+  const handleRestoreClick = () => {
+    restoreInputRef.current?.click();
+  };
+
+  const handleRestoreFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      onRestoreSystem(e.target.files[0]);
+    }
+    // Reset input so same file can be selected again if needed
+    if (e.target) e.target.value = '';
   };
 
   const CreationForm = () => (
@@ -357,6 +377,41 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
         {rootProjects.map(project => (
             <ProjectTreeItem key={project.id} project={project} depth={0} />
         ))}
+      </div>
+
+      {/* System Footer */}
+      <div className="p-3 border-t border-gray-800 bg-gray-900/50 mt-auto">
+          <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+              <Database size={10} />
+              <span>Data Management</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+              <button 
+                 onClick={onBackupSystem}
+                 className="flex flex-col items-center justify-center gap-1.5 p-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors border border-gray-700 hover:border-gray-600"
+                 title="Export all data to ZIP"
+              >
+                  <DownloadCloud size={16} />
+                  <span className="text-[10px] font-medium">Backup</span>
+              </button>
+              
+              <button 
+                 onClick={handleRestoreClick}
+                 className="flex flex-col items-center justify-center gap-1.5 p-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors border border-gray-700 hover:border-gray-600"
+                 title="Import data from ZIP"
+              >
+                  <UploadCloud size={16} />
+                  <span className="text-[10px] font-medium">Restore</span>
+              </button>
+              
+              <input 
+                 ref={restoreInputRef}
+                 type="file" 
+                 accept=".zip"
+                 className="hidden"
+                 onChange={handleRestoreFileChange}
+              />
+          </div>
       </div>
     </div>
   );

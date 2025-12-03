@@ -7,11 +7,17 @@ import { ProjectSidebar } from './components/ProjectSidebar';
 import { DetailModal } from './components/DetailModal';
 import { GridItem } from './components/GridItem';
 import { MoveModal } from './components/MoveModal'; 
+import { Toast } from './components/Toast';
 import { ComfyFile, Project } from './types';
 import { parseComfyMetadata } from './utils/comfyParser';
 import * as db from './utils/db';
 import { Trash2, Menu, Upload, ScanLine, Command, Folder, CheckSquare, FolderInput, X, Check } from 'lucide-react';
 import JSZip from 'jszip';
+
+// Undo Action Types
+type UndoAction = 
+  | { type: 'DELETE_FILES'; files: ComfyFile[] }
+  | { type: 'MOVE_FILES'; files: ComfyFile[]; sourceProjectId: string; targetProjectId: string };
 
 const App: React.FC = () => {
   // --- State ---
@@ -26,6 +32,10 @@ const App: React.FC = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showMoveModal, setShowMoveModal] = useState(false);
+
+  // Undo / Toast State
+  const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
+  const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
 
   // --- Initialization ---
   useEffect(() => {
@@ -102,6 +112,75 @@ const App: React.FC = () => {
       cleanup();
     };
   }, [activeProjectId]);
+
+
+  // --- Toast & Undo Logic ---
+  
+  const showToast = (message: string, action?: UndoAction) => {
+    setToast({ message, visible: true });
+    if (action) {
+      setUndoAction(action);
+    } else {
+      setUndoAction(null);
+    }
+  };
+
+  const closeToast = () => {
+    setToast(prev => ({ ...prev, visible: false }));
+    // We don't clear undoAction immediately to allow for animation/logic, 
+    // but effectively the user can't click it once hidden.
+  };
+
+  const handleUndo = async () => {
+    if (!undoAction) return;
+
+    try {
+      if (undoAction.type === 'DELETE_FILES') {
+        // Restore files to DB
+        await Promise.all(undoAction.files.map(f => db.saveFile(f)));
+        
+        // Update UI if they belong to current project
+        const filesToRestoreToView = undoAction.files.filter(f => f.projectId === activeProjectId);
+        if (filesToRestoreToView.length > 0) {
+            // Re-create URLs since they might be stale if we did strict cleanup (though we keep blobs in memory here)
+            const restoredWithUrls = filesToRestoreToView.map(f => ({
+                ...f,
+                previewUrl: URL.createObjectURL(f.blob)
+            }));
+            
+            setFiles(prev => [...restoredWithUrls, ...prev].sort((a, b) => b.createdAt - a.createdAt));
+        }
+        showToast(`Restored ${undoAction.files.length} files.`);
+      } 
+      else if (undoAction.type === 'MOVE_FILES') {
+        // Move back to source
+        const ids = undoAction.files.map(f => f.id);
+        await db.moveFiles(ids, undoAction.sourceProjectId);
+
+        // Logic: 
+        // If we are currently in targetProjectId, remove them.
+        // If we are currently in sourceProjectId, add them back.
+        
+        if (activeProjectId === undoAction.targetProjectId) {
+            setFiles(prev => prev.filter(f => !ids.includes(f.id)));
+        } else if (activeProjectId === undoAction.sourceProjectId) {
+             const restoredWithUrls = undoAction.files.map(f => ({
+                ...f,
+                previewUrl: URL.createObjectURL(f.blob)
+            }));
+            setFiles(prev => [...restoredWithUrls, ...prev].sort((a, b) => b.createdAt - a.createdAt));
+        }
+        showToast(`Moved ${ids.length} files back.`);
+      }
+    } catch (e) {
+      console.error("Undo failed", e);
+      alert("Failed to undo action.");
+    } finally {
+      setUndoAction(null);
+      // Keep toast open briefly to show confirmation
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 2000);
+    }
+  };
 
 
   // --- Project Actions ---
@@ -266,6 +345,130 @@ const App: React.FC = () => {
         alert("Failed to export project.");
     }
   };
+  
+  // --- System Backup/Restore ---
+
+  const handleBackupSystem = async () => {
+    try {
+      showToast("Preparing backup...");
+      const allProjects = await db.getProjects();
+      const allFiles = await db.getAllFiles();
+
+      if (allFiles.length === 0 && allProjects.length <= 1) {
+          showToast("Database is practically empty. Backup cancelled.");
+          return;
+      }
+
+      const zip = new JSZip();
+      
+      // Separate metadata from blobs
+      const filesMetadata = allFiles.map(f => {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { blob, previewUrl, ...rest } = f;
+          return rest;
+      });
+
+      const manifest = {
+          version: 1,
+          createdAt: Date.now(),
+          projects: allProjects,
+          files: filesMetadata
+      };
+
+      // Add manifest
+      zip.file('comfy_metadata_backup.json', JSON.stringify(manifest, null, 2));
+
+      // Add binary files in assets folder
+      const assetsFolder = zip.folder('assets');
+      if (assetsFolder) {
+          allFiles.forEach(f => {
+              assetsFolder.file(f.id, f.blob);
+          });
+      }
+
+      const content = await zip.generateAsync({ type: "blob" });
+      
+      const url = URL.createObjectURL(content);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `comfy_backup_${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      showToast("Backup created successfully.");
+    } catch (e) {
+      console.error("Backup failed", e);
+      alert("System backup failed. Check console for details.");
+    }
+  };
+
+  const handleRestoreSystem = async (file: File) => {
+    if (!confirm("Restoring will merge data into your current database. Existing files with same IDs will be overwritten. Continue?")) {
+        return;
+    }
+
+    try {
+      showToast("Restoring backup...");
+      const zip = await JSZip.loadAsync(file);
+      
+      const manifestFile = zip.file('comfy_metadata_backup.json');
+      if (!manifestFile) {
+          alert("Invalid backup file: Missing manifest.");
+          return;
+      }
+
+      const manifestStr = await manifestFile.async('string');
+      const manifest = JSON.parse(manifestStr);
+
+      if (!manifest.projects || !manifest.files) {
+          alert("Invalid backup file structure.");
+          return;
+      }
+
+      // Reconstruct files with blobs
+      const reconstructedFiles: ComfyFile[] = [];
+      
+      for (const meta of manifest.files) {
+          const blobEntry = zip.file(`assets/${meta.id}`);
+          if (blobEntry) {
+              const blob = await blobEntry.async('blob');
+              // Ensure mime type is preserved on the blob
+              const typedBlob = new Blob([blob], { type: meta.fileType });
+              
+              reconstructedFiles.push({
+                  ...meta,
+                  blob: typedBlob,
+                  previewUrl: undefined // will be generated by UI
+              });
+          }
+      }
+
+      // Bulk Import
+      await db.importDatabase(manifest.projects, reconstructedFiles);
+
+      // Refresh State
+      const storedProjects = await db.getProjects();
+      setProjects(storedProjects);
+      
+      // If current project exists, just trigger reload, otherwise switch
+      if (storedProjects.some(p => p.id === activeProjectId)) {
+         // Trigger reload by momentarily clearing then setting
+         const currentId = activeProjectId;
+         setActiveProjectId('');
+         setTimeout(() => setActiveProjectId(currentId), 0);
+      } else if (storedProjects.length > 0) {
+         setActiveProjectId(storedProjects[0].id);
+      }
+
+      showToast(`Restore complete. ${reconstructedFiles.length} files imported.`);
+
+    } catch (e) {
+      console.error("Restore failed", e);
+      alert("System restore failed. The file might be corrupted.");
+    }
+  };
 
   // --- File Actions ---
 
@@ -360,13 +563,25 @@ const App: React.FC = () => {
   }, [activeProjectId]);
 
   const handleDeleteFile = async (fileId: string) => {
-    await db.deleteFile(fileId);
-    setFiles(prev => {
-      const file = prev.find(f => f.id === fileId);
-      if (file?.previewUrl) URL.revokeObjectURL(file.previewUrl);
-      return prev.filter(f => f.id !== fileId);
-    });
-    if (selectedFileId === fileId) setSelectedFileId(null);
+    try {
+        // Capture file for undo before deleting
+        const fileToDelete = files.find(f => f.id === fileId);
+        
+        await db.deleteFile(fileId);
+        
+        setFiles(prev => {
+            const f = prev.find(i => i.id === fileId);
+            if (f?.previewUrl) URL.revokeObjectURL(f.previewUrl);
+            return prev.filter(i => i.id !== fileId);
+        });
+        if (selectedFileId === fileId) setSelectedFileId(null);
+        
+        if (fileToDelete) {
+             showToast('File deleted', { type: 'DELETE_FILES', files: [fileToDelete] });
+        }
+    } catch (e) {
+        console.error("Delete failed", e);
+    }
   };
 
   // --- Selection Mode Logic ---
@@ -404,28 +619,29 @@ const App: React.FC = () => {
       const count = selectedIds.size;
       if (!window.confirm(`Are you sure you want to delete ${count} selected items?`)) return;
 
-      // Capture IDs in a local variable to be safe in closures
       const idsToDelete = Array.from(selectedIds) as string[];
+      // Capture files for Undo
+      const filesToDelete = files.filter(f => selectedIds.has(f.id));
 
       try {
           await db.deleteFiles(idsToDelete);
           
           setFiles(prev => {
-              // Create a set for O(1) lookup during filter
               const deletedSet = new Set(idsToDelete);
-              
-              // Clean up object URLs
               prev.forEach(f => {
                   if (deletedSet.has(f.id) && f.previewUrl) {
                       URL.revokeObjectURL(f.previewUrl);
                   }
               });
-
               return prev.filter(f => !deletedSet.has(f.id));
           });
 
           setSelectedIds(new Set());
           setIsSelectionMode(false);
+
+          // Show Undo Toast
+          showToast(`Deleted ${count} files`, { type: 'DELETE_FILES', files: filesToDelete });
+
       } catch (e) {
           console.error("Failed to delete selected files", e);
           alert("Some files could not be deleted. Please try again.");
@@ -434,6 +650,10 @@ const App: React.FC = () => {
 
   const handleMoveSelected = async (targetProjectId: string) => {
       const ids = Array.from(selectedIds) as string[];
+      // Capture for undo
+      const filesToMove = files.filter(f => selectedIds.has(f.id));
+      const sourceProjectId = activeProjectId;
+
       try {
         await db.moveFiles(ids, targetProjectId);
         
@@ -441,6 +661,14 @@ const App: React.FC = () => {
         setSelectedIds(new Set());
         setIsSelectionMode(false);
         setShowMoveModal(false);
+
+        showToast(`Moved ${filesToMove.length} files`, { 
+            type: 'MOVE_FILES', 
+            files: filesToMove, 
+            sourceProjectId, 
+            targetProjectId 
+        });
+
       } catch (e) {
         console.error("Failed to move files", e);
         alert("Failed to move files.");
@@ -528,6 +756,8 @@ const App: React.FC = () => {
                 onToggleProject={handleToggleProject}
                 onMoveProject={handleMoveProject}
                 onExportProject={handleExportProject}
+                onBackupSystem={handleBackupSystem}
+                onRestoreSystem={handleRestoreSystem}
             />
         </div>
      </div>
@@ -536,6 +766,14 @@ const App: React.FC = () => {
   return (
     <div className="flex h-[100dvh] bg-[#050505] text-gray-200 font-sans overflow-hidden selection:bg-blue-500/20">
       
+      {/* Toast Notification */}
+      <Toast 
+         message={toast.message} 
+         isVisible={toast.visible} 
+         onUndo={undoAction ? handleUndo : undefined}
+         onClose={closeToast}
+      />
+
       {/* Modals */}
       {selectedFile && (
         <DetailModal 
