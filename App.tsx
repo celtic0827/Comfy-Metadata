@@ -1,17 +1,32 @@
-
 import * as React from 'react';
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { DropZone } from './components/DropZone';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { DetailModal } from './components/DetailModal';
 import { GridItem } from './components/GridItem';
 import { MoveModal } from './components/MoveModal'; 
+import { PromptExportModal } from './components/PromptExportModal';
 import { Toast } from './components/Toast';
 import { ComfyFile, Project } from './types';
-import { parseComfyMetadata } from './utils/comfyParser';
+import { parseComfyMetadata, extractGenerationParams } from './utils/comfyParser';
 import * as db from './utils/db';
-import { Trash2, Menu, Upload, ScanLine, Command, Folder, CheckSquare, FolderInput, X, Check } from 'lucide-react';
+import { 
+  Trash2, 
+  Menu, 
+  Upload, 
+  ScanLine, 
+  Command, 
+  Folder, 
+  CheckSquare, 
+  FolderInput, 
+  X, 
+  Check,
+  FileDown,
+  Search,
+  Filter,
+  Sparkles
+} from 'lucide-react';
 import JSZip from 'jszip';
 
 // Undo Action Types
@@ -32,6 +47,14 @@ const App: React.FC = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showMoveModal, setShowMoveModal] = useState(false);
+
+  // Export Modal State
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [filesForExport, setFilesForExport] = useState<ComfyFile[]>([]);
+
+  // Search & Filter State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterMode, setFilterMode] = useState<'all' | 'image' | 'video' | 'has_prompt'>('all');
 
   // Undo / Toast State
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
@@ -81,10 +104,14 @@ const App: React.FC = () => {
         const storedFiles = await db.getFilesByProject(activeProjectId);
         
         if (isActive) {
-          const hydratedFiles = storedFiles.map(f => ({
-            ...f,
-            previewUrl: URL.createObjectURL(f.blob)
-          }));
+          const hydratedFiles = storedFiles.map(f => {
+            const params = f.params || (f.metadata ? extractGenerationParams(f.metadata) : undefined);
+            return {
+              ...f,
+              params,
+              previewUrl: URL.createObjectURL(f.blob)
+            };
+          });
           setFiles(hydratedFiles.sort((a, b) => b.createdAt - a.createdAt));
           // Reset selection on project change
           setIsSelectionMode(false);
@@ -544,7 +571,8 @@ const App: React.FC = () => {
            metadata: formattedRaw,
            summary: result.summary,
            positivePrompt: result.positivePrompt,
-           negativePrompt: result.negativePrompt
+           negativePrompt: result.negativePrompt,
+           params: result.params
         };
 
         await db.saveFile(updatedFile);
@@ -704,6 +732,57 @@ const App: React.FC = () => {
   const activeProject = projects.find(p => p.id === activeProjectId);
   const selectedFile = files.find(f => f.id === selectedFileId);
 
+  // Filtered files for search & tabs
+  const displayedFiles = useMemo(() => {
+    return files.filter(file => {
+      // Type filter
+      if (filterMode === 'image' && file.type !== 'image') return false;
+      if (filterMode === 'video' && file.type !== 'video') return false;
+      if (filterMode === 'has_prompt' && !file.positivePrompt && !file.negativePrompt) return false;
+
+      // Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        const posMatch = (file.positivePrompt || '').toLowerCase().includes(q);
+        const negMatch = (file.negativePrompt || '').toLowerCase().includes(q);
+        const nameMatch = file.fileName.toLowerCase().includes(q);
+        const ckptMatch = (file.params?.checkpoint || '').toLowerCase().includes(q);
+        const metaMatch = (file.metadata || '').toLowerCase().includes(q);
+        return posMatch || negMatch || nameMatch || ckptMatch || metaMatch;
+      }
+      return true;
+    });
+  }, [files, filterMode, searchQuery]);
+
+  const handleOpenExportSelected = () => {
+    const selected = files.filter(f => selectedIds.has(f.id));
+    if (selected.length === 0) return;
+    setFilesForExport(selected);
+    setShowExportModal(true);
+  };
+
+  const handleOpenExportAll = () => {
+    const targetFiles = displayedFiles.length > 0 ? displayedFiles : files;
+    if (targetFiles.length === 0) return;
+    setFilesForExport(targetFiles);
+    setShowExportModal(true);
+  };
+
+  const handleLoadSampleVideo = async () => {
+    try {
+      showToast("正在載入範例影片...");
+      const res = await fetch('/assets/aistudio/S01_0_5cf761ff.mp4');
+      if (!res.ok) throw new Error("找不到範例影片檔案");
+      const blob = await res.blob();
+      const sampleFile = new File([blob], 'S01_0_5cf761ff.mp4', { type: 'video/mp4' });
+      await processFiles([sampleFile]);
+      showToast("範例影片載入成功！已擷取字數最長 Prompt");
+    } catch (e: any) {
+      console.error("載入範例失敗", e);
+      showToast("載入範例失敗: " + (e.message || "未知錯誤"));
+    }
+  };
+
   if (loading) {
     return (
       <div className="h-[100dvh] bg-gray-950 flex items-center justify-center text-gray-500 font-mono">
@@ -793,6 +872,14 @@ const App: React.FC = () => {
         />
       )}
 
+      {showExportModal && (
+        <PromptExportModal
+           files={filesForExport}
+           onClose={() => setShowExportModal(false)}
+           onToast={(msg) => showToast(msg)}
+        />
+      )}
+
       {/* Mobile Menu Overlay */}
       {isSidebarOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
@@ -832,104 +919,230 @@ const App: React.FC = () => {
         >
             {/* Toolbar */}
             <div className="sticky top-0 z-20 p-4 md:p-6 pb-2 md:pb-4 backdrop-blur-xl bg-[#050505]/80">
-                <div className="flex items-center justify-between backdrop-blur-md bg-gray-900/40 p-1.5 rounded-xl border border-gray-800/60 shadow-sm transition-all">
+                <div className="backdrop-blur-md bg-gray-900/40 p-2 rounded-xl border border-gray-800/60 shadow-sm transition-all space-y-2">
                     
-                    {/* Toolbar Left */}
-                    <div className="flex items-center gap-3 pl-3">
-                        {isSelectionMode ? (
-                             <div className="flex items-center gap-3 text-blue-400">
-                                <CheckSquare size={18} className="fill-blue-500/20" />
-                                <span className="font-medium text-sm">{selectedIds.size} Selected</span>
-                             </div>
-                        ) : (
-                             <>
-                                <span className="text-gray-400">
-                                    <Folder size={16} />
-                                </span>
-                                <span className="text-sm font-medium text-gray-200">
-                                    {activeProject?.name}
-                                </span>
-                             </>
-                        )}
+                    {/* Top Row: Title/Selection & Action Buttons */}
+                    <div className="flex items-center justify-between">
+                        {/* Toolbar Left */}
+                        <div className="flex items-center gap-3 pl-2">
+                            {isSelectionMode ? (
+                                 <div className="flex items-center gap-2 text-blue-400">
+                                    <CheckSquare size={17} className="fill-blue-500/20" />
+                                    <span className="font-semibold text-sm">已選取 {selectedIds.size} 項</span>
+                                 </div>
+                            ) : (
+                                 <div className="flex items-center gap-2">
+                                    <span className="text-gray-400">
+                                        <Folder size={16} />
+                                    </span>
+                                    <span className="text-sm font-semibold text-gray-200">
+                                        {activeProject?.name}
+                                    </span>
+                                    <span className="text-[11px] font-mono text-gray-500 px-2 py-0.5 rounded-full bg-gray-800/80">
+                                        {displayedFiles.length}{displayedFiles.length !== files.length ? ` / ${files.length}` : ''} 個檔案
+                                    </span>
+                                 </div>
+                            )}
+                        </div>
+
+                        {/* Toolbar Right */}
+                        <div className="flex items-center gap-2">
+                            {files.length > 0 && (
+                                <>
+                                    {isSelectionMode ? (
+                                        <>
+                                            <button 
+                                                onClick={handleSelectAll}
+                                                className="px-2.5 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+                                            >
+                                                {selectedIds.size === files.length ? '取消全選' : '全選'}
+                                            </button>
+
+                                            <div className="w-px h-4 bg-gray-700 mx-0.5"></div>
+
+                                            {/* Export Selected Prompts */}
+                                            <button 
+                                                disabled={selectedIds.size === 0}
+                                                onClick={handleOpenExportSelected}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-blue-300 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent font-medium shadow-sm"
+                                                title="將選取的圖片/影片 Prompt 匯出為單一文件"
+                                            >
+                                                <FileDown size={14} />
+                                                <span>匯出文件 ({selectedIds.size})</span>
+                                            </button>
+
+                                            <button 
+                                                disabled={selectedIds.size === 0}
+                                                onClick={() => setShowMoveModal(true)}
+                                                className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                                                title="移動選取項目"
+                                            >
+                                                <FolderInput size={17} />
+                                            </button>
+
+                                            <button 
+                                                disabled={selectedIds.size === 0}
+                                                onClick={handleDeleteSelected}
+                                                className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                                                title="刪除選取項目"
+                                            >
+                                                <Trash2 size={17} />
+                                            </button>
+                                            
+                                            <div className="w-px h-4 bg-gray-700 mx-0.5"></div>
+
+                                            <button 
+                                                onClick={toggleSelectionMode}
+                                                className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-lg shadow-blue-900/20 transition-all"
+                                            >
+                                                完成
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            {/* Batch Export All Prompts */}
+                                            <button 
+                                                onClick={handleOpenExportAll}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-blue-300 bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 rounded-lg transition-all font-medium"
+                                                title="將 Prompt 匯出為單一文件 (支援 Markdown, Excel/CSV, TXT, JSON)"
+                                            >
+                                                <FileDown size={14} className="text-blue-400" />
+                                                <span className="hidden sm:inline">匯出 Prompt 文件</span>
+                                            </button>
+
+                                            <button 
+                                                onClick={toggleSelectionMode}
+                                                className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors"
+                                                title="選取檔案"
+                                            >
+                                                <CheckSquare size={16} />
+                                            </button>
+                                        </>
+                                    )}
+                                </>
+                            )}
+                        </div>
                     </div>
 
-                    {/* Toolbar Right */}
-                    <div className="flex items-center gap-2">
-                        {files.length > 0 && (
-                            <>
-                                {isSelectionMode ? (
-                                    <>
-                                        <button 
-                                            onClick={handleSelectAll}
-                                            className="px-3 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-                                        >
-                                            {selectedIds.size === files.length ? 'Deselect All' : 'Select All'}
-                                        </button>
-
-                                        <div className="w-px h-4 bg-gray-700 mx-1"></div>
-
-                                        <button 
-                                            disabled={selectedIds.size === 0}
-                                            onClick={() => setShowMoveModal(true)}
-                                            className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                                            title="Move Selected"
-                                        >
-                                            <FolderInput size={18} />
-                                        </button>
-
-                                        <button 
-                                            disabled={selectedIds.size === 0}
-                                            onClick={handleDeleteSelected}
-                                            className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                                            title="Delete Selected"
-                                        >
-                                            <Trash2 size={18} />
-                                        </button>
-                                        
-                                        <div className="w-px h-4 bg-gray-700 mx-1"></div>
-
-                                        <button 
-                                            onClick={toggleSelectionMode}
-                                            className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-lg shadow-blue-900/20 transition-all"
-                                        >
-                                            Done
-                                        </button>
-                                    </>
-                                ) : (
-                                    <>
-                                       <button 
-                                            onClick={toggleSelectionMode}
-                                            className="p-1.5 text-gray-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors"
-                                            title="Select Files"
-                                        >
-                                            <CheckSquare size={16} />
-                                        </button>
-                                    </>
+                    {/* Sub Row: Search & Keyword Filter Bar */}
+                    {files.length > 0 && (
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-2 border-t border-gray-800/50">
+                            
+                            {/* Keyword Search Input */}
+                            <div className="relative flex-1 max-w-md">
+                                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+                                <input
+                                    type="text"
+                                    placeholder="搜尋 Prompt、模型、參數、節點或檔名..."
+                                    value={searchQuery}
+                                    onChange={e => setSearchQuery(e.target.value)}
+                                    className="w-full bg-gray-900/80 border border-gray-800/80 rounded-lg pl-8 pr-8 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                                />
+                                {searchQuery && (
+                                    <button
+                                        onClick={() => setSearchQuery('')}
+                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                                    >
+                                        <X size={12} />
+                                    </button>
                                 )}
-                            </>
-                        )}
-                    </div>
+                            </div>
+
+                            {/* Filter Chips */}
+                            <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
+                                <button
+                                    onClick={() => setFilterMode('all')}
+                                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                                        filterMode === 'all' 
+                                            ? 'bg-blue-600/30 text-blue-300 border border-blue-500/40' 
+                                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60'
+                                    }`}
+                                >
+                                    全部 ({files.length})
+                                </button>
+                                <button
+                                    onClick={() => setFilterMode('has_prompt')}
+                                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                                        filterMode === 'has_prompt' 
+                                            ? 'bg-green-600/30 text-green-300 border border-green-500/40' 
+                                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60'
+                                    }`}
+                                >
+                                    有 Prompt
+                                </button>
+                                <button
+                                    onClick={() => setFilterMode('image')}
+                                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                                        filterMode === 'image' 
+                                            ? 'bg-purple-600/30 text-purple-300 border border-purple-500/40' 
+                                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60'
+                                    }`}
+                                >
+                                    圖片 PNG
+                                </button>
+                                <button
+                                    onClick={() => setFilterMode('video')}
+                                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                                        filterMode === 'video' 
+                                            ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' 
+                                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60'
+                                    }`}
+                                >
+                                    影片 MP4
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
             {/* File Grid */}
             <div className="px-4 md:px-6 pb-24 relative z-10">
                 {files.length === 0 && (
-                    <div className="mt-8">
+                    <div className="mt-8 space-y-4">
                         <DropZone 
                             onFilesDropped={processFiles} 
                             className="h-64 border-dashed border-gray-800 bg-gray-900/20 hover:bg-gray-900/40"
                         />
-                        <p className="text-center text-gray-500 mt-4 text-xs uppercase tracking-wider">
-                            Project is empty. Drop files or ZIP to start.
+                        <div className="flex flex-col items-center gap-2">
+                            <p className="text-center text-gray-500 text-xs uppercase tracking-wider">
+                                專案目前為空。拖放圖片/影片/ZIP 檔，或直接測試範例：
+                            </p>
+                            <button
+                                onClick={handleLoadSampleVideo}
+                                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600/30 to-indigo-600/30 hover:from-blue-600/50 hover:to-indigo-600/50 border border-blue-500/40 rounded-xl text-xs font-semibold text-blue-300 transition-all shadow-lg shadow-blue-900/10"
+                            >
+                                <Sparkles size={14} className="text-blue-400" />
+                                載入範例影片 (S01_0_5cf761ff.mp4) 體驗自動擷取「字數最長」Prompt
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Filter Empty State */}
+                {files.length > 0 && displayedFiles.length === 0 && (
+                    <div className="mt-12 p-8 border border-dashed border-gray-800 rounded-2xl bg-gray-900/20 text-center max-w-md mx-auto">
+                        <Filter size={32} className="mx-auto text-gray-600 mb-3" />
+                        <h3 className="text-sm font-semibold text-gray-300">找不到符合條件的檔案</h3>
+                        <p className="text-xs text-gray-500 mt-1">
+                            沒有項目符合搜尋關鍵字「{searchQuery}」或當前過濾類別。
                         </p>
+                        <button
+                            onClick={() => {
+                                setSearchQuery('');
+                                setFilterMode('all');
+                            }}
+                            className="mt-4 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs font-medium text-gray-200 rounded-lg transition-colors"
+                        >
+                            清除搜尋過濾條件
+                        </button>
                     </div>
                 )}
 
                 {/* Grid View */}
-                {files.length > 0 && (
+                {displayedFiles.length > 0 && (
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    {files.map(file => (
+                    {displayedFiles.map(file => (
                         <GridItem 
                             key={file.id} 
                             file={file} 

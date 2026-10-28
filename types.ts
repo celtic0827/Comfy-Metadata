@@ -7,6 +7,20 @@ export interface Project {
   isOpen?: boolean; // For expanding/collapsing folders in UI
 }
 
+export interface GenerationParams {
+  checkpoint?: string;
+  loras?: string[];
+  seed?: number | string;
+  steps?: number;
+  cfg?: number;
+  sampler?: string;
+  scheduler?: string;
+  denoise?: number;
+  width?: number;
+  height?: number;
+  customFields?: Record<string, any>;
+}
+
 export interface ComfyFile {
   id: string;
   projectId: string; // Link to a project
@@ -20,6 +34,7 @@ export interface ComfyFile {
   summary?: string[]; // Legacy fallback or generic text
   positivePrompt?: string; // Extracted positive prompt
   negativePrompt?: string; // Extracted negative prompt
+  params?: GenerationParams; // Generation parameters (model, seed, steps, etc.)
   errorMessage?: string;
   createdAt: number;
 }
@@ -29,4 +44,15 @@ export interface ParsedMetadata {
   summary?: string[];
   positivePrompt?: string;
   negativePrompt?: string;
+  params?: GenerationParams;
 }
+
+export interface SearchMatchField {
+  nodeId: string;
+  nodeTitle?: string;
+  nodeClass: string;
+  key: string;
+  value: any;
+  matchType: 'key' | 'value' | 'both';
+}
+
