@@ -52,9 +52,23 @@ const App: React.FC = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [filesForExport, setFilesForExport] = useState<ComfyFile[]>([]);
 
-  // Search & Filter State
+  // Search & Filter State with localStorage memory
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterMode, setFilterMode] = useState<'all' | 'image' | 'video' | 'has_prompt'>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'image' | 'video' | 'has_prompt'>(() => {
+    try {
+      const saved = localStorage.getItem('comfy_filter_mode');
+      if (saved && ['all', 'image', 'video', 'has_prompt'].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'all';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('comfy_filter_mode', filterMode);
+    } catch {}
+  }, [filterMode]);
 
   // Undo / Toast State
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });

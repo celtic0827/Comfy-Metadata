@@ -35,6 +35,25 @@ export interface ExportFieldsConfig {
   customFieldKey: string;
 }
 
+const DEFAULT_FIELDS: ExportFieldsConfig = {
+  fileName: true,
+  fileType: true,
+  positivePrompt: true,
+  negativePrompt: true,
+  checkpoint: true,
+  loras: true,
+  parameters: true,
+  dimensions: true,
+  createdAt: true,
+  customFieldKey: '',
+};
+
+const STORAGE_KEYS = {
+  FIELDS: 'comfy_export_fields_v1',
+  STRATEGY: 'comfy_export_strategy_v1',
+  FORMAT: 'comfy_export_format_v1',
+};
+
 interface PromptExportModalProps {
   files: ComfyFile[];
   onClose: () => void;
@@ -46,28 +65,77 @@ export const PromptExportModal: React.FC<PromptExportModalProps> = ({
   onClose,
   onToast
 }) => {
-  const [format, setFormat] = useState<ExportFormat>('markdown');
-  const [promptStrategy, setPromptStrategy] = useState<PromptStrategy>('longest');
+  // Format selection with localStorage memory
+  const [format, setFormat] = useState<ExportFormat>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.FORMAT);
+      if (saved && ['markdown', 'text', 'csv', 'json'].includes(saved)) {
+        return saved as ExportFormat;
+      }
+    } catch {}
+    return 'markdown';
+  });
+
+  // Prompt strategy with localStorage memory (defaults to 'longest')
+  const [promptStrategy, setPromptStrategy] = useState<PromptStrategy>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.STRATEGY);
+      if (saved && ['longest', 'standard', 'last'].includes(saved)) {
+        return saved as PromptStrategy;
+      }
+    } catch {}
+    return 'longest';
+  });
+
   const [keywordFilter, setKeywordFilter] = useState('');
   const [copied, setCopied] = useState(false);
   const [previewTab, setPreviewTab] = useState<'preview' | 'settings'>('preview');
 
-  // Fields selection state
-  const [fields, setFields] = useState<ExportFieldsConfig>({
-    fileName: true,
-    fileType: true,
-    positivePrompt: true,
-    negativePrompt: true,
-    checkpoint: true,
-    loras: true,
-    parameters: true,
-    dimensions: true,
-    createdAt: true,
-    customFieldKey: '',
+  // Fields selection state with localStorage memory
+  const [fields, setFields] = useState<ExportFieldsConfig>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.FIELDS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...DEFAULT_FIELDS, ...parsed };
+      }
+    } catch (e) {
+      console.warn('Failed to parse saved export fields from localStorage', e);
+    }
+    return DEFAULT_FIELDS;
   });
+
+  // Save fields state to localStorage on every change
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.FIELDS, JSON.stringify(fields));
+    } catch (e) {
+      console.error('Failed to save export fields to localStorage', e);
+    }
+  }, [fields]);
+
+  // Save strategy to localStorage
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.STRATEGY, promptStrategy);
+    } catch {}
+  }, [promptStrategy]);
+
+  // Save format to localStorage
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.FORMAT, format);
+    } catch {}
+  }, [format]);
 
   const toggleField = (key: keyof Omit<ExportFieldsConfig, 'customFieldKey'>) => {
     setFields(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleResetFields = () => {
+    setFields(DEFAULT_FIELDS);
+    setPromptStrategy('longest');
+    onToast('已還原為預設勾選狀態');
   };
 
   // Ensure files have resolved params
@@ -571,9 +639,18 @@ export const PromptExportModal: React.FC<PromptExportModalProps> = ({
                 <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
                   <Sliders size={13} className="text-blue-400" /> 擷取欄位選擇
                 </span>
-                <span className="text-[11px] text-gray-500">
-                  {Object.values(fields).filter(v => v === true).length} 欄已選
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleResetFields}
+                    className="text-[10px] text-gray-500 hover:text-blue-400 underline transition-colors"
+                    title="重設所有勾選為預設值"
+                  >
+                    還原預設
+                  </button>
+                  <span className="text-[11px] text-gray-500">
+                    {Object.values(fields).filter(v => v === true).length} 欄已選
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-2">
