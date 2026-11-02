@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { ComfyFile } from '../types';
 import { 
   Sparkles, 
@@ -9,7 +9,8 @@ import {
   Maximize2, 
   ThumbsUp, 
   ThumbsDown,
-  Trash2
+  Trash2,
+  Play
 } from 'lucide-react';
 
 interface GridItemProps {
@@ -30,6 +31,55 @@ export const GridItem: React.FC<GridItemProps> = ({
   onToggleSelect 
 }) => {
   const [copyState, setCopyState] = useState<'idle' | 'pos' | 'neg'>('idle');
+  const [duration, setDuration] = useState<number | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Set initial thumbnail to video midpoint (50%)
+  const handleLoadedMetadata = () => {
+    if (videoRef.current && Number.isFinite(videoRef.current.duration) && videoRef.current.duration > 0) {
+      setDuration(videoRef.current.duration);
+      videoRef.current.currentTime = videoRef.current.duration * 0.5;
+    }
+  };
+
+  useEffect(() => {
+    if (file.type === 'video' && videoRef.current) {
+      const vid = videoRef.current;
+      if (vid.readyState >= 1 && Number.isFinite(vid.duration) && vid.duration > 0) {
+        setDuration(vid.duration);
+        vid.currentTime = vid.duration * 0.5;
+      }
+    }
+  }, [file.previewUrl, file.type]);
+
+  const handleMouseEnter = () => {
+    if (file.type === 'video' && videoRef.current) {
+      const playPromise = videoRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => setIsPlaying(true))
+          .catch(() => {});
+      }
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (file.type === 'video' && videoRef.current) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+      // Reset back to 50% frame thumbnail
+      if (Number.isFinite(videoRef.current.duration) && videoRef.current.duration > 0) {
+        videoRef.current.currentTime = videoRef.current.duration * 0.5;
+      }
+    }
+  };
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
 
   const handleCopy = (e: React.MouseEvent, type: 'pos' | 'neg') => {
     e.stopPropagation();
@@ -73,14 +123,21 @@ export const GridItem: React.FC<GridItemProps> = ({
         }
       `}
       onClick={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       {/* Thumbnail */}
       {file.previewUrl ? (
         file.type === 'video' ? (
           <video 
+            ref={videoRef}
             src={file.previewUrl} 
-            className={`w-full h-full object-cover transition-all duration-500 ${isSelected ? 'opacity-60 scale-95' : 'opacity-80 group-hover:opacity-100'}`} 
+            className={`w-full h-full object-cover transition-all duration-500 ${isSelected ? 'opacity-60 scale-95' : 'opacity-85 group-hover:opacity-100'}`} 
             muted 
+            loop
+            playsInline
+            preload="metadata"
+            onLoadedMetadata={handleLoadedMetadata}
           />
         ) : (
           <img 
@@ -97,10 +154,22 @@ export const GridItem: React.FC<GridItemProps> = ({
       
       {/* Top Overlay: Type & Action Buttons */}
       <div className="absolute top-0 left-0 right-0 p-2 flex justify-between items-start z-30 pointer-events-none">
-          {/* Left: Type Icon & Status */}
-          <div className="flex items-center gap-1.5 p-1.5 bg-black/40 backdrop-blur-md rounded-lg border border-white/5 shadow-sm">
+          {/* Left: Type Icon & Status & Video 50% Duration indicator */}
+          <div className="flex items-center gap-1.5 p-1.5 bg-black/60 backdrop-blur-md rounded-lg border border-white/10 shadow-sm">
                {file.type === 'video' ? <VideoIcon size={12} className="text-purple-400" /> : <ImageIcon size={12} className="text-blue-400" />}
                <div className={`w-1.5 h-1.5 rounded-full ${file.status === 'success' ? 'bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`} />
+               {file.type === 'video' && (
+                 <span className="text-[10px] text-purple-300/90 font-mono pl-0.5 tracking-tight">
+                   {isPlaying ? (
+                     <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                       <Play size={8} className="fill-emerald-400" />
+                       Play
+                     </span>
+                   ) : (
+                     duration ? `${formatTime(duration)} (50%)` : '50%'
+                   )}
+                 </span>
+               )}
           </div>
 
           {/* Right: Actions (Pointer events enabled) */}
